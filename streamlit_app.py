@@ -36,31 +36,67 @@ def load_data():
     start_date = end_date - timedelta(days=365*10)
     
     with st.spinner("📥 Fetching Apple stock data..."):
-        apple_data = yf.download('AAPL', start=start_date, end=end_date, progress=False)
+        try:
+            apple_data = yf.download('AAPL', start=start_date, end=end_date, progress=False)
+        except Exception as e:
+            st.error(f"Error downloading data: {e}")
+            return None
+    
+    # Handle multi-level columns
+    if isinstance(apple_data.columns, pd.MultiIndex):
+        apple_data.columns = apple_data.columns.droplevel('Ticker')
+    
+    # Clean data
+    apple_data = apple_data.dropna()
+    
+    if apple_data.empty:
+        st.error("No data available")
+        return None
     
     return apple_data
 
 # Load and prepare data
 apple_data = load_data()
-apple_data.columns = apple_data.columns.droplevel('Ticker')
 
-# Prepare Prophet format
+if apple_data is None:
+    st.stop()
+
+# Prepare Prophet format - ensure proper data types
 df_prophet = apple_data.reset_index()[['Date', 'Close']].copy()
 df_prophet.columns = ['ds', 'y']
+
+# Ensure datetime type
+df_prophet['ds'] = pd.to_datetime(df_prophet['ds'])
+df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
+df_prophet = df_prophet.dropna()
+
+# Validate we have data
+if len(df_prophet) < 2:
+    st.error("Insufficient data for analysis")
+    st.stop()
 
 # Calculate time periods
 today = df_prophet['ds'].max()
 four_years_ago = today - timedelta(days=365*4)
 six_months_ago = today - timedelta(days=180)
 
-# Split data
+# Split data with validation
 train_data = df_prophet[df_prophet['ds'] >= four_years_ago].copy()
 test_data = df_prophet[(df_prophet['ds'] >= six_months_ago) & (df_prophet['ds'] <= today)].copy()
 
+# Ensure minimum data requirements
+if len(train_data) < 2:
+    train_data = df_prophet.copy()
+if len(test_data) < 2:
+    test_data = df_prophet.tail(50).copy()
+
 # Train Prophet model
 @st.cache_resource
-def train_model():
+def train_model(data):
     """Train Prophet model with data"""
+    if len(data) < 2:
+        raise ValueError(f"Insufficient data: need at least 2 rows, got {len(data)}")
+    
     with st.spinner("🤖 Training Prophet Model..."):
         model = Prophet(
             yearly_seasonality=True,
@@ -70,38 +106,39 @@ def train_model():
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            model.fit(train_data)
+            model.fit(data)
     return model
 
 try:
-    model = train_model()
-except Exception:
-    # Fallback if caching fails
-    model = Prophet(
-        yearly_seasonality=True,
-        daily_seasonality=False,
-        weekly_seasonality=True,
-        interval_width=0.95
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        model.fit(train_data)
+    model = train_model(train_data)
+except Exception as e:
+    st.error(f"Error training model: {str(e)}")
+    st.info(f"Training data shape: {train_data.shape}")
+    st.stop()
 
 # Generate predictions
-test_forecast = model.predict(test_data[['ds']])
-test_comparison = test_data.merge(test_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']], on='ds')
-
-# Calculate metrics
-actual_values = test_comparison['y'].values
-predicted_values = test_comparison['yhat'].values
-rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
-mae = np.mean(np.abs(actual_values - predicted_values))
+try:
+    test_forecast = model.predict(test_data[['ds']])
+    test_comparison = test_data.merge(test_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']], on='ds')
+    
+    # Calculate metrics
+    actual_values = test_comparison['y'].values
+    predicted_values = test_comparison['yhat'].values
+    rmse = np.sqrt(mean_squared_error(actual_values, predicted_values))
+    mae = np.mean(np.abs(actual_values - predicted_values))
+except Exception as e:
+    st.error(f"Error generating predictions: {str(e)}")
+    st.stop()
 
 # Future forecast
-future_periods = 365
-future_dates = model.make_future_dataframe(periods=future_periods)
-future_forecast = model.predict(future_dates)
-future_only = future_forecast[future_forecast['ds'] > today].copy()
+try:
+    future_periods = 365
+    future_dates = model.make_future_dataframe(periods=future_periods)
+    future_forecast = model.predict(future_dates)
+    future_only = future_forecast[future_forecast['ds'] > today].copy()
+except Exception as e:
+    st.error(f"Error generating future forecast: {str(e)}")
+    st.stop()
 
 # ============================================================================
 # METRICS ROW
