@@ -28,37 +28,85 @@ with st.sidebar:
     use_sample = st.checkbox("Load Sample Data", value=True)
     refresh_data = st.button("🔄 Refresh Data from Yahoo Finance")
 
-# Load data
-@st.cache_data
-def load_data():
-    """Load Apple stock data from Yahoo Finance"""
+# Generate sample data for demonstration
+def generate_sample_data():
+    """Generate realistic sample Apple stock data"""
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365*10)
     
-    with st.spinner("📥 Fetching Apple stock data..."):
+    dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    
+    # Generate realistic price data with trend and seasonality
+    np.random.seed(42)
+    base_price = 150
+    trend = np.linspace(0, 50, len(dates))
+    noise = np.random.normal(0, 5, len(dates))
+    prices = base_price + trend + noise
+    prices = np.maximum(prices, 50)  # Ensure positive prices
+    
+    sample_data = pd.DataFrame({
+        'Open': prices * (1 + np.random.uniform(-0.02, 0.02, len(dates))),
+        'High': prices * (1 + np.random.uniform(0.01, 0.05, len(dates))),
+        'Low': prices * (1 - np.random.uniform(0.01, 0.05, len(dates))),
+        'Close': prices,
+        'Volume': np.random.randint(50000000, 150000000, len(dates)) 
+    }, index=dates)
+    
+    return sample_data
+
+# Load data with fallback
+@st.cache_data
+def load_data_cached():
+    """Load Apple stock data from Yahoo Finance with caching"""
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365*10)
+    
+    with st.spinner("📥 Fetching Apple stock data from Yahoo Finance..."):
         try:
             apple_data = yf.download('AAPL', start=start_date, end=end_date, progress=False)
+            
+            # Verify data was downloaded
+            if apple_data is None or len(apple_data) == 0:
+                return None
+            
+            # Handle multi-level columns (when downloading multiple tickers)
+            if isinstance(apple_data.columns, pd.MultiIndex):
+                apple_data.columns = apple_data.columns.droplevel('Ticker')
+            
+            # Clean data - remove any NaN values
+            apple_data = apple_data.drop_duplicates().dropna()
+            
+            if len(apple_data) == 0:
+                return None
+            
+            return apple_data
+                
         except Exception as e:
-            st.error(f"Error downloading data: {e}")
+            st.warning(f"⚠️ Could not fetch live data: {str(e)}")
             return None
-    
-    # Handle multi-level columns
-    if isinstance(apple_data.columns, pd.MultiIndex):
-        apple_data.columns = apple_data.columns.droplevel('Ticker')
-    
-    # Clean data
-    apple_data = apple_data.dropna()
-    
-    if apple_data.empty:
-        st.error("No data available")
-        return None
-    
-    return apple_data
 
 # Load and prepare data
-apple_data = load_data()
+if refresh_data:
+    st.cache_data.clear()
 
-if apple_data is None:
+# Try to load real data first
+apple_data = None
+if not use_sample:
+    apple_data = load_data_cached()
+
+# Fall back to sample data if real data fails or user selected sample
+if apple_data is None or len(apple_data) == 0:
+    if use_sample:
+        st.info("📊 Using Sample Data for demonstration")
+        apple_data = generate_sample_data()
+    else:
+        st.error("❌ Unable to load data. Please try enabling 'Load Sample Data' or check your internet connection.")
+        st.stop()
+else:
+    st.success(f"✅ Successfully loaded {len(apple_data)} records of Apple stock data")
+
+if apple_data is None or len(apple_data) == 0:
+    st.error("No data available. Please try again.")
     st.stop()
 
 # Prepare data format - ensure proper data types
@@ -473,7 +521,7 @@ summary_col1, summary_col2 = st.columns(2)
 with summary_col1:
     st.subheader("Data Overview")
     st.write(f"""
-    - **Full Historical Data**: {df_prophet['ds'].min().date()} to {today.date()}
+    - **Full Historical Data**: {df_data['ds'].min().date()} to {today.date()}
     - **Training Period**: {train_data['ds'].min().date()} to {train_data['ds'].max().date()}
     - **Training Data Points**: {len(train_data)} days (4 years)
     - **Test Period**: {test_data['ds'].min().date()} to {test_data['ds'].max().date()}
@@ -487,7 +535,7 @@ with summary_col2:
     - **MAE (Test)**: ${mae:.2f}
     - **Mean Error**: ${test_comparison['error'].mean():.2f}
     - **Mean % Error**: {np.mean(np.abs(test_comparison['percent_error'])):.2f}%
-    - **Price Range (Historical)**: ${df_prophet['y'].min():.2f} - ${df_prophet['y'].max():.2f}
+    - **Price Range (Historical)**: ${df_data['y'].min():.2f} - ${df_data['y'].max():.2f}
     """)
 
 st.info("""
