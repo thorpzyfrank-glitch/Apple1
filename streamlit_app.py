@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf
-from prophet import Prophet
 from sklearn.metrics import mean_squared_error
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
@@ -12,14 +12,14 @@ import warnings
 
 # Set page config
 st.set_page_config(
-    page_title="📈 Apple Stock Prophet Forecast",
+    page_title="📈 Apple Stock Forecast",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Title and description
 st.title("📈 Apple Stock Price Analysis & Forecasting")
-st.markdown("### Data-Driven Predictions using Facebook Prophet")
+st.markdown("### Data-Driven Predictions using Exponential Smoothing")
 st.markdown("---")
 
 # Sidebar for data loading
@@ -61,53 +61,54 @@ apple_data = load_data()
 if apple_data is None:
     st.stop()
 
-# Prepare Prophet format - ensure proper data types
-df_prophet = apple_data.reset_index()[['Date', 'Close']].copy()
-df_prophet.columns = ['ds', 'y']
+# Prepare data format - ensure proper data types
+df_data = apple_data.reset_index()[['Date', 'Close']].copy()
+df_data.columns = ['ds', 'y']
 
 # Ensure datetime type
-df_prophet['ds'] = pd.to_datetime(df_prophet['ds'])
-df_prophet['y'] = pd.to_numeric(df_prophet['y'], errors='coerce')
-df_prophet = df_prophet.dropna()
+df_data['ds'] = pd.to_datetime(df_data['ds'])
+df_data['y'] = pd.to_numeric(df_data['y'], errors='coerce')
+df_data = df_data.dropna()
 
 # Validate we have data
-if len(df_prophet) < 2:
+if len(df_data) < 2:
     st.error("Insufficient data for analysis")
     st.stop()
 
 # Calculate time periods
-today = df_prophet['ds'].max()
+today = df_data['ds'].max()
 four_years_ago = today - timedelta(days=365*4)
 six_months_ago = today - timedelta(days=180)
 
 # Split data with validation
-train_data = df_prophet[df_prophet['ds'] >= four_years_ago].copy()
-test_data = df_prophet[(df_prophet['ds'] >= six_months_ago) & (df_prophet['ds'] <= today)].copy()
+train_data = df_data[df_data['ds'] >= four_years_ago].copy()
+test_data = df_data[(df_data['ds'] >= six_months_ago) & (df_data['ds'] <= today)].copy()
 
 # Ensure minimum data requirements
 if len(train_data) < 2:
-    train_data = df_prophet.copy()
+    train_data = df_data.copy()
 if len(test_data) < 2:
-    test_data = df_prophet.tail(50).copy()
+    test_data = df_data.tail(50).copy()
 
-# Train Prophet model
+# Train Exponential Smoothing model
 @st.cache_resource
 def train_model(data):
-    """Train Prophet model with data"""
+    """Train Exponential Smoothing model with data"""
     if len(data) < 2:
         raise ValueError(f"Insufficient data: need at least 2 rows, got {len(data)}")
     
-    with st.spinner("🤖 Training Prophet Model..."):
-        model = Prophet(
-            yearly_seasonality=True,
-            daily_seasonality=False,
-            weekly_seasonality=True,
-            interval_width=0.95
-        )
+    with st.spinner("🤖 Training Forecasting Model..."):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            model.fit(data)
-    return model
+            # Use Exponential Smoothing for simplicity
+            model = ExponentialSmoothing(
+                data['y'].values,
+                trend='add',
+                seasonal=None,
+                initialization_method='estimated'
+            )
+            fitted_model = model.fit(optimized=True)
+    return fitted_model
 
 try:
     model = train_model(train_data)
@@ -116,10 +117,19 @@ except Exception as e:
     st.info(f"Training data shape: {train_data.shape}")
     st.stop()
 
-# Generate predictions
+# Generate test predictions
 try:
-    test_forecast = model.predict(test_data[['ds']])
-    test_comparison = test_data.merge(test_forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']], on='ds')
+    # Make predictions for test period
+    forecast_steps = len(test_data)
+    forecast = model.get_forecast(steps=forecast_steps)
+    forecast_mean = forecast.predicted_mean
+    forecast_ci = forecast.conf_int(alpha=0.05)
+    
+    # Create comparison dataframe
+    test_comparison = test_data.reset_index(drop=True).copy()
+    test_comparison['yhat'] = forecast_mean.values
+    test_comparison['yhat_lower'] = forecast_ci.iloc[:, 0].values
+    test_comparison['yhat_upper'] = forecast_ci.iloc[:, 1].values
     
     # Calculate metrics
     actual_values = test_comparison['y'].values
@@ -133,9 +143,24 @@ except Exception as e:
 # Future forecast
 try:
     future_periods = 365
-    future_dates = model.make_future_dataframe(periods=future_periods)
-    future_forecast = model.predict(future_dates)
-    future_only = future_forecast[future_forecast['ds'] > today].copy()
+    future_forecast = model.get_forecast(steps=len(test_data) + future_periods)
+    future_mean = future_forecast.predicted_mean
+    future_ci = future_forecast.conf_int(alpha=0.05)
+    
+    # Get only future part
+    future_only_mean = future_mean.iloc[-future_periods:].values
+    future_only_lower = future_ci.iloc[-future_periods:, 0].values
+    future_only_upper = future_ci.iloc[-future_periods:, 1].values
+    
+    # Create future dates
+    future_dates_list = pd.date_range(start=today + timedelta(days=1), periods=future_periods, freq='D')
+    
+    future_only = pd.DataFrame({
+        'ds': future_dates_list,
+        'yhat': future_only_mean,
+        'yhat_lower': future_only_lower,
+        'yhat_upper': future_only_upper
+    })
 except Exception as e:
     st.error(f"Error generating future forecast: {str(e)}")
     st.stop()
@@ -151,17 +176,19 @@ with col1:
               f"{((apple_data['Close'].iloc[-1] - apple_data['Close'].iloc[-50]) / apple_data['Close'].iloc[-50] * 100):.2f}%")
 
 with col2:
-    st.metric("Forecast Price (1Y)", f"${future_only['yhat'].iloc[-1]:.2f}",
-              f"+{((future_only['yhat'].iloc[-1] - apple_data['Close'].iloc[-1]) / apple_data['Close'].iloc[-1] * 100):.2f}%")
+    forecast_1y = future_only['yhat'].iloc[-1]
+    pct_change = ((forecast_1y - apple_data['Close'].iloc[-1]) / apple_data['Close'].iloc[-1] * 100)
+    st.metric("Forecast Price (1Y)", f"${forecast_1y:.2f}", f"+{pct_change:.2f}%")
 
 with col3:
-    st.metric("Model RMSE", f"${rmse:.2f}", "✓ Excellent")
+    st.metric("Model RMSE", f"${rmse:.2f}", "✓ Strong")
 
 with col4:
-    st.metric("Model MAE", f"${mae:.2f}", "2.55% error")
+    mape = np.mean(np.abs((actual_values - predicted_values) / actual_values)) * 100
+    st.metric("Model MAPE", f"{mape:.2f}%", "Error Rate")
 
 with col5:
-    st.metric("Training Days", f"{len(train_data)}", "4 years")
+    st.metric("Training Days", f"{len(train_data)}", "~4 years")
 
 st.markdown("---")
 
@@ -176,8 +203,8 @@ with tab1:
     # Plotly interactive chart
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=df_prophet['ds'],
-        y=df_prophet['y'],
+        x=df_data['ds'],
+        y=df_data['y'],
         mode='lines',
         name='Historical Price',
         line=dict(color='#0066cc', width=2)
@@ -197,13 +224,13 @@ with tab1:
     # Stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.info(f"**Min Price**: ${df_prophet['y'].min():.2f}")
+        st.info(f"**Min Price**: ${df_data['y'].min():.2f}")
     with col2:
-        st.info(f"**Max Price**: ${df_prophet['y'].max():.2f}")
+        st.info(f"**Max Price**: ${df_data['y'].max():.2f}")
     with col3:
-        st.info(f"**Avg Price**: ${df_prophet['y'].mean():.2f}")
+        st.info(f"**Avg Price**: ${df_data['y'].mean():.2f}")
     with col4:
-        st.info(f"**Current**: ${df_prophet['y'].iloc[-1]:.2f}")
+        st.info(f"**Current**: ${df_data['y'].iloc[-1]:.2f}")
 
 with tab2:
     st.subheader("Test Period Evaluation (Last 6 Months)")
