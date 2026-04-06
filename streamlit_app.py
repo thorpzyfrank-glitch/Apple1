@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.express as px
+import warnings
 
 # Set page config
 st.set_page_config(
@@ -67,10 +68,24 @@ def train_model():
             weekly_seasonality=True,
             interval_width=0.95
         )
-        model.fit(train_data)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model.fit(train_data)
     return model
 
-model = train_model()
+try:
+    model = train_model()
+except Exception:
+    # Fallback if caching fails
+    model = Prophet(
+        yearly_seasonality=True,
+        daily_seasonality=False,
+        weekly_seasonality=True,
+        interval_width=0.95
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(train_data)
 
 # Generate predictions
 test_forecast = model.predict(test_data[['ds']])
