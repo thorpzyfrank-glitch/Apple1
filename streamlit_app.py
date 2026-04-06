@@ -171,17 +171,22 @@ except Exception as e:
 
 # Generate test predictions
 try:
-    # Make predictions for test period
+    # Make predictions for test period using forecast method
     forecast_steps = len(test_data)
-    forecast = model.get_forecast(steps=forecast_steps)
-    forecast_mean = forecast.predicted_mean
-    forecast_ci = forecast.conf_int(alpha=0.05)
+    forecast_values = model.forecast(steps=forecast_steps)
+    
+    # Calculate confidence intervals manually
+    # Get residuals from training
+    train_fit = model.fittedvalues
+    residuals = train_data['y'].values - train_fit.values
+    std_error = np.std(residuals)
+    confidence = 1.96 * std_error  # 95% confidence interval
     
     # Create comparison dataframe
     test_comparison = test_data.reset_index(drop=True).copy()
-    test_comparison['yhat'] = forecast_mean.values
-    test_comparison['yhat_lower'] = forecast_ci.iloc[:, 0].values
-    test_comparison['yhat_upper'] = forecast_ci.iloc[:, 1].values
+    test_comparison['yhat'] = forecast_values
+    test_comparison['yhat_lower'] = forecast_values - confidence
+    test_comparison['yhat_upper'] = forecast_values + confidence
     
     # Calculate metrics
     actual_values = test_comparison['y'].values
@@ -195,14 +200,15 @@ except Exception as e:
 # Future forecast
 try:
     future_periods = 365
-    future_forecast = model.get_forecast(steps=len(test_data) + future_periods)
-    future_mean = future_forecast.predicted_mean
-    future_ci = future_forecast.conf_int(alpha=0.05)
+    future_forecast_values = model.forecast(steps=len(test_data) + future_periods)
+    
+    # Calculate confidence intervals
+    confidence = 1.96 * std_error  # 95% confidence interval
     
     # Get only future part
-    future_only_mean = future_mean.iloc[-future_periods:].values
-    future_only_lower = future_ci.iloc[-future_periods:, 0].values
-    future_only_upper = future_ci.iloc[-future_periods:, 1].values
+    future_only_mean = future_forecast_values.iloc[-future_periods:].values
+    future_only_lower = future_only_mean - confidence
+    future_only_upper = future_only_mean + confidence
     
     # Create future dates
     future_dates_list = pd.date_range(start=today + timedelta(days=1), periods=future_periods, freq='D')
