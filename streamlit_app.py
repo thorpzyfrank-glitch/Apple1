@@ -45,12 +45,16 @@ def generate_sample_data():
     prices = np.maximum(prices, 50)  # Ensure positive prices
     
     sample_data = pd.DataFrame({
+        'Date': dates,
         'Open': prices * (1 + np.random.uniform(-0.02, 0.02, len(dates))),
         'High': prices * (1 + np.random.uniform(0.01, 0.05, len(dates))),
         'Low': prices * (1 - np.random.uniform(0.01, 0.05, len(dates))),
         'Close': prices,
         'Volume': np.random.randint(50000000, 150000000, len(dates)) 
-    }, index=dates)
+    })
+    
+    # Set Date as index
+    sample_data.set_index('Date', inplace=True)
     
     return sample_data
 
