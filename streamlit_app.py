@@ -178,11 +178,16 @@ try:
     # Calculate confidence intervals manually
     # Get residuals from training
     train_fit = model.fittedvalues
-    residuals = train_data['y'].values - train_fit.values
+    if hasattr(train_fit, 'values'):
+        train_fit_vals = train_fit.values
+    else:
+        train_fit_vals = train_fit
+    
+    residuals = train_data['y'].values - train_fit_vals
     std_error = np.std(residuals)
     confidence = 1.96 * std_error  # 95% confidence interval
     
-    # Create comparison dataframe
+    # Create comparison dataframe - forecast_values is already numpy array
     test_comparison = test_data.reset_index(drop=True).copy()
     test_comparison['yhat'] = forecast_values
     test_comparison['yhat_lower'] = forecast_values - confidence
@@ -205,8 +210,8 @@ try:
     # Calculate confidence intervals
     confidence = 1.96 * std_error  # 95% confidence interval
     
-    # Get only future part
-    future_only_mean = future_forecast_values.iloc[-future_periods:].values
+    # Get only future part (forecast_values is numpy array, so slice directly)
+    future_only_mean = future_forecast_values[-future_periods:]
     future_only_lower = future_only_mean - confidence
     future_only_upper = future_only_mean + confidence
     
